@@ -1,0 +1,23 @@
+# Runtime data
+uploads/
+outputs/
+yt_downloads/
+projects/
+
+# Secrets
+stemsplit_config.json
+
+# Logs & flags
+flask_stdout.log
+flask_stderr.log
+*.log
+*.flag
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
