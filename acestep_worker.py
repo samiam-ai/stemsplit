@@ -86,8 +86,9 @@ def _max_chunk_dur_s(guidance_scale=1.0):
         torch.cuda.empty_cache()
         free_gb = torch.cuda.mem_get_info()[0] / (1024**3)
         per_batch = 0.6 if guidance_scale > 1.0 else 0.3
-        # Solve: free_gb >= per_batch * (dur/60) + 0.55
-        dur = (free_gb - 0.55) / per_batch * 60.0
+        # Use 0.7 GB margin (ACE-Step uses 0.5 GB internally; extra 0.2 GB buffer
+        # accounts for VRAM that gets re-allocated between our check and generation).
+        dur = (free_gb - 0.7) / per_batch * 60.0
         return max(20.0, min(dur, 240.0))
     except Exception:
         return 240.0
