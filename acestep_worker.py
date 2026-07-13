@@ -8,12 +8,13 @@ from flask import Flask, request, jsonify, send_file
 
 app = Flask(__name__)
 
-gen_jobs    = {}
-dit_handler = None
-llm_handler = None
-ready       = False
-loading     = True
-load_error  = ''
+gen_jobs          = {}
+dit_handler       = None
+llm_handler       = None
+ready             = False
+loading           = True
+load_error        = ''
+cpu_inference_mode = False   # set by --cpu-inference flag
 
 
 # ── MODEL INIT ───────────────────────────────────────────────────────
@@ -25,18 +26,26 @@ def init_models(acestep_dir):
         from acestep.llm_inference import LLMHandler
         import torch
 
-        vram_gb = 0
-        if torch.cuda.is_available():
+        if cpu_inference_mode:
+            device = 'cpu'
+            print('[Worker] CPU inference mode — models load into RAM, no VRAM used (generation will be slow)')
+        elif torch.cuda.is_available():
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             free_gb = torch.cuda.mem_get_info()[0] / (1024**3)
             print(f'[Worker] GPU: {torch.cuda.get_device_name(0)}, Total VRAM: {vram_gb:.1f} GB, Free: {free_gb:.1f} GB')
+            if vram_gb < 5.0:
+                print(f'[Worker] WARNING: GPU has only {vram_gb:.1f} GB VRAM total. '
+                      f'Generation may fail. Use start_all_cpu.bat to run on CPU instead.')
+            device = 'cuda'
+        else:
+            device = 'cpu'
 
         print('[Worker] Initializing DiT model (downloading ~5GB on first run)...')
         dit_handler = AceStepHandler()
         dit_handler.initialize_service(
             project_root=acestep_dir,
             config_path='acestep-v15-turbo',
-            device='cuda' if torch.cuda.is_available() else 'cpu'
+            device=device
         )
 
         print('[Worker] Initializing LM model...')
@@ -45,13 +54,14 @@ def init_models(acestep_dir):
             checkpoint_dir=os.path.join(acestep_dir, 'checkpoints'),
             lm_model_path='acestep-5Hz-lm-0.6B',
             backend='pt',
-            device='cuda' if torch.cuda.is_available() else 'cpu'
+            device=device
         )
 
-        # Report post-load VRAM
-        if torch.cuda.is_available():
+        if device == 'cuda':
             free_after = torch.cuda.mem_get_info()[0] / (1024**3)
             print(f'[Worker] VRAM after loading: {free_after:.1f} GB free of {vram_gb:.1f} GB total')
+        else:
+            print('[Worker] Models loaded on CPU.')
 
         ready   = True
         loading = False
@@ -90,11 +100,16 @@ def _trim_to_vram_limit(src_path, out_dir, guidance_scale=1.0):
     import torch
     from pydub import AudioSegment
 
+    # CPU mode has no VRAM constraint — pass full audio through unchanged
+    if cpu_inference_mode or not torch.cuda.is_available():
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(src_path)
+        return src_path, False, len(audio) / 1000.0, 0.0
+
     try:
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
         gc.collect()
-        free_gb = torch.cuda.mem_get_info()[0] / (1024**3) if torch.cuda.is_available() else 999.0
+        free_gb = torch.cuda.mem_get_info()[0] / (1024**3)
     except Exception:
         free_gb = 999.0
 
@@ -412,7 +427,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--acestep-dir', default=os.path.abspath('.'))
     parser.add_argument('--port', type=int, default=5001)
+    parser.add_argument('--cpu-inference', action='store_true',
+                        help='Load models on CPU instead of GPU. Slower but no VRAM limit.')
     args = parser.parse_args()
+
+    if args.cpu_inference:
+        cpu_inference_mode = True
 
     adir = os.path.abspath(args.acestep_dir)
     if not os.path.isdir(adir):
@@ -422,6 +442,8 @@ if __name__ == '__main__':
 
     print(f'\n{"="*52}')
     print(f'  AceStep Worker  |  port {args.port}')
+    if cpu_inference_mode:
+        print(f'  Mode: CPU inference (no VRAM limit, slower)')
     print(f'{"="*52}')
     print(f'  Dir: {adir}')
     print(f'  Modes: generate / cover / reference / replace\n')
