@@ -19,7 +19,7 @@ cpu_inference_mode = False   # set by --cpu-inference flag
 
 # ── MODEL INIT ───────────────────────────────────────────────────────
 def init_models(acestep_dir):
-    global dit_handler, llm_handler, ready, loading, load_error
+    global dit_handler, llm_handler, ready, loading, load_error, cpu_inference_mode
     try:
         print('[Worker] Importing AceStep...')
         from acestep.handler import AceStepHandler
@@ -28,15 +28,22 @@ def init_models(acestep_dir):
 
         if cpu_inference_mode:
             device = 'cpu'
-            print('[Worker] CPU inference mode — models load into RAM, no VRAM used (generation will be slow)')
+            print('[Worker] CPU inference mode (--cpu-inference flag) — models load into RAM, no VRAM limit')
         elif torch.cuda.is_available():
-            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            free_gb = torch.cuda.mem_get_info()[0] / (1024**3)
-            print(f'[Worker] GPU: {torch.cuda.get_device_name(0)}, Total VRAM: {vram_gb:.1f} GB, Free: {free_gb:.1f} GB')
-            if vram_gb < 5.0:
-                print(f'[Worker] WARNING: GPU has only {vram_gb:.1f} GB VRAM total. '
-                      f'Generation may fail. Use start_all_cpu.bat to run on CPU instead.')
-            device = 'cuda'
+            vram_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            free_gb    = torch.cuda.mem_get_info()[0] / (1024**3)
+            print(f'[Worker] GPU: {torch.cuda.get_device_name(0)}, '
+                  f'Total VRAM: {vram_total:.1f} GB, Free: {free_gb:.1f} GB')
+            # Models consume ~4 GB; if total VRAM < 5 GB there won't be enough
+            # headroom for generation — auto-switch to CPU before loading.
+            if vram_total < 5.0:
+                cpu_inference_mode = True
+                device = 'cpu'
+                print(f'[Worker] Auto-switching to CPU: GPU only has {vram_total:.1f} GB VRAM '
+                      f'(models need ~4 GB, leaving < 1 GB for inference). '
+                      f'Generation will be slower but has no VRAM limit.')
+            else:
+                device = 'cuda'
         else:
             device = 'cpu'
 
