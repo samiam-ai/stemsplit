@@ -34,13 +34,16 @@ def init_models(acestep_dir):
             free_gb    = torch.cuda.mem_get_info()[0] / (1024**3)
             print(f'[Worker] GPU: {torch.cuda.get_device_name(0)}, '
                   f'Total VRAM: {vram_total:.1f} GB, Free: {free_gb:.1f} GB')
-            # Models consume ~4 GB; if total VRAM < 5 GB there won't be enough
-            # headroom for generation — auto-switch to CPU before loading.
-            if vram_total < 5.0:
+            # ACE-Step models consume 5-6 GB VRAM; inference needs ~1 GB on top.
+            # Require ≥7 GB free *before* loading so there is headroom after.
+            # Checking free_gb (not total) catches GPUs where other apps already
+            # consumed most VRAM (e.g. 6 GB card with 5.8 GB free → 0.2 GB left
+            # after loading → inference OOM regardless of card size).
+            if free_gb < 7.0:
                 cpu_inference_mode = True
                 device = 'cpu'
-                print(f'[Worker] Auto-switching to CPU: GPU only has {vram_total:.1f} GB VRAM '
-                      f'(models need ~4 GB, leaving < 1 GB for inference). '
+                print(f'[Worker] Auto-switching to CPU: only {free_gb:.1f} GB VRAM free '
+                      f'(need ~7 GB — ~6 GB for models + ~1 GB for inference). '
                       f'Generation will be slower but has no VRAM limit.')
             else:
                 device = 'cuda'
