@@ -66,7 +66,7 @@ def init_models(acestep_dir):
 
         if device == 'cuda':
             free_after = torch.cuda.mem_get_info()[0] / (1024**3)
-            print(f'[Worker] VRAM after loading: {free_after:.1f} GB free of {vram_gb:.1f} GB total')
+            print(f'[Worker] VRAM after loading: {free_after:.1f} GB free of {vram_total:.1f} GB total')
         else:
             print('[Worker] Models loaded on CPU.')
 
