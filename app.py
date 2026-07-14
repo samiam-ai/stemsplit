@@ -656,13 +656,14 @@ HTML = """<!DOCTYPE html>
         <button class="yt-auth-btn logout" id="ytLogoutBtn" style="display:none">Logout</button>
       </div>
       <div class="yt-device-panel" id="ytDevicePanel">
-        <div class="yt-device-steps">
-          1. Open &nbsp;<span class="yt-device-url" id="ytDeviceUrl">https://google.com/device</span><br>
-          2. Enter this code: &nbsp;<span class="yt-device-code" id="ytDeviceCode">&#x2014;&#x2014;&#x2014;&#x2014;</span>
+        <div class="yt-device-steps" id="ytDeviceSteps" style="display:none">
+          1. Open &nbsp;<span class="yt-device-url" id="ytDeviceUrl"></span><br>
+          2. Enter this code: &nbsp;<span class="yt-device-code" id="ytDeviceCode"></span>
         </div>
+        <div style="font-size:12px;color:var(--t3);font-family:monospace;word-break:break-all" id="ytDeviceRaw">Getting authorization URL from YouTube...</div>
         <div class="yt-device-actions">
-          <button class="yt-device-open" id="ytDeviceOpen">Open in browser</button>
-          <span style="font-size:12px;color:var(--t3)" id="ytDeviceWait">Waiting for you to approve...</span>
+          <button class="yt-device-open" id="ytDeviceOpen" style="display:none">Open in browser</button>
+          <span style="font-size:12px;color:var(--t3)" id="ytDeviceWait"></span>
           <button class="yt-device-cancel" id="ytDeviceCancel">Cancel</button>
         </div>
       </div>
@@ -1705,11 +1706,19 @@ HTML = """<!DOCTYPE html>
       fetch('/api/yt/oauth_status')
         .then(function(r){return r.json();})
         .then(function(d){
-          if (d.auth_url)  document.getElementById('ytDeviceUrl').textContent  = d.auth_url;
-          if (d.user_code) document.getElementById('ytDeviceCode').textContent = d.user_code;
-          if (d.status === 'pending' || d.status === 'starting') {
-            var wait = document.getElementById('ytDeviceWait');
-            wait.textContent = d.user_code ? 'Waiting for you to approve...' : 'Getting authorization URL...';
+          // Always show the raw yt-dlp message so nothing is ever blank
+          if (d.raw_message) {
+            document.getElementById('ytDeviceRaw').textContent = d.raw_message;
+          }
+          // If we parsed the structured URL + code, show the clean view
+          if (d.auth_url && d.user_code) {
+            document.getElementById('ytDeviceSteps').style.display = 'block';
+            document.getElementById('ytDeviceUrl').textContent  = d.auth_url;
+            document.getElementById('ytDeviceCode').textContent = d.user_code;
+            document.getElementById('ytDeviceOpen').style.display = 'inline';
+            document.getElementById('ytDeviceWait').textContent = 'Waiting for you to approve in the browser...';
+          } else if (d.auth_url) {
+            document.getElementById('ytDeviceOpen').style.display = 'inline';
           }
           if (d.authenticated) {
             clearInterval(ytOAuthPoll); ytOAuthPoll = null;
@@ -1718,7 +1727,7 @@ HTML = """<!DOCTYPE html>
           } else if (d.status === 'error') {
             clearInterval(ytOAuthPoll); ytOAuthPoll = null;
             var wait = document.getElementById('ytDeviceWait');
-            wait.textContent = 'Login failed — check the app console for details, then try again.';
+            wait.textContent = 'Login failed — see the raw message above for details.';
             wait.style.color = '#f87171';
             document.getElementById('ytAuthDot').className = 'yt-auth-dot';
           }
@@ -2571,7 +2580,8 @@ def karaoke_export(jid):
 
 # ── YOUTUBE DOWNLOADER ───────────────────────────────────────────────
 _YT_OAUTH_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.yt_oauth_cache')
-_yt_oauth = {'status': 'idle', 'auth_url': None, 'user_code': None, 'thread': None}
+_yt_oauth = {'status': 'idle', 'auth_url': None, 'user_code': None,
+             'thread': None, 'raw_message': None}
 
 def _is_oauth_authenticated():
     """True only after an explicit successful login this session or a prior one."""
@@ -2590,28 +2600,35 @@ def _run_oauth_flow():
         os.makedirs(_YT_OAUTH_CACHE, exist_ok=True)
 
         class _OAuthLogger:
-            """Passes yt-dlp log messages to our OAuth state capture."""
-            def debug(self, msg):
-                self._capture(msg)
-            def info(self, msg):
-                self._capture(msg)
-            def warning(self, msg):
-                self._capture(msg)
+            """Routes yt-dlp messages into _yt_oauth state."""
+            def debug(self, msg):   self._capture(msg)
+            def info(self, msg):    self._capture(msg)
+            def warning(self, msg): self._capture(msg)
             def error(self, msg):
-                print(f'[YT OAuth] {msg}')
+                print(f'[YT OAuth] ERROR: {msg}')
+                _yt_oauth['raw_message'] = msg
+
             def _capture(self, msg):
                 print(f'[YT OAuth] {msg}')
+                # Always store the most recent message so the UI can show it
+                _yt_oauth['raw_message'] = msg
                 low = msg.lower()
-                # yt-dlp prints: "To give yt-dlp access to your account,
-                #   go to  https://www.google.com/device  and enter code  ABCD-1234"
-                if 'google.com' in low or 'device' in low:
-                    url_m  = re.search(r'https?://\S+', msg)
-                    code_m = re.search(r'(?:enter\s+code|code)\s+([A-Z0-9]{4}-[A-Z0-9]{4})', msg, re.I)
+
+                # Detect device-auth URL — broadened: any https URL near the auth prompt
+                if 'http' in low and ('device' in low or 'google' in low or 'youtube' in low or 'code' in low):
+                    url_m = re.search(r'https?://\S+', msg)
                     if url_m:
                         _yt_oauth['auth_url'] = url_m.group(0).rstrip('.,) ')
                         _yt_oauth['status']   = 'pending'
+
+                # Detect user code — accept any alphanumeric 4-8 chars around "code"
+                if 'code' in low:
+                    # Try "XXXX-XXXX" format first, then loose word after "code"
+                    code_m = (re.search(r'\b([A-Z0-9]{4}[- ][A-Z0-9]{4})\b', msg, re.I) or
+                              re.search(r'code[:\s]+([A-Z0-9]{4,})', msg, re.I))
                     if code_m:
                         _yt_oauth['user_code'] = code_m.group(1).upper()
+
                 if 'success' in low or 'logged in' in low or 'authorized' in low:
                     _yt_oauth['status'] = 'done'
 
@@ -2768,6 +2785,7 @@ def yt_oauth_status():
         'status':        _yt_oauth['status'],
         'auth_url':      _yt_oauth.get('auth_url'),
         'user_code':     _yt_oauth.get('user_code'),
+        'raw_message':   _yt_oauth.get('raw_message'),
         'authenticated': authed,
     })
 
