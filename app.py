@@ -508,21 +508,15 @@ HTML = """<!DOCTYPE html>
     .yt-auth-status{font-size:12px;display:flex;align-items:center;gap:6px;flex:1}
     .yt-auth-dot{width:8px;height:8px;border-radius:50%;background:var(--t3);flex-shrink:0}
     .yt-auth-dot.ok{background:#22c55e}
-    .yt-auth-dot.waiting{background:#f0a500;animation:ytpulse 1s infinite}
-    @keyframes ytpulse{0%,100%{opacity:1}50%{opacity:.4}}
     .yt-auth-btn{padding:6px 14px;background:var(--card);border:1px solid var(--bds);border-radius:var(--rs);color:var(--t);font-family:inherit;font-size:12px;font-weight:500;cursor:pointer;transition:all .2s;white-space:nowrap}
-    .yt-auth-btn:hover:not(:disabled){border-color:var(--bdr)}
-    .yt-auth-btn:disabled{opacity:.5;cursor:not-allowed}
+    .yt-auth-btn:hover{border-color:var(--bdr)}
     .yt-auth-btn.logout{color:var(--t3);font-weight:400}
-    .yt-device-panel{display:none;background:var(--card);border:1px solid var(--bds);border-radius:var(--rs);padding:14px 16px;flex-direction:column;gap:10px;font-size:13px}
-    .yt-device-steps{line-height:1.8;color:var(--t2)}
-    .yt-device-code{font-family:monospace;font-size:18px;font-weight:700;color:var(--t);letter-spacing:2px}
-    .yt-device-url{color:var(--purl);word-break:break-all;font-size:12px}
-    .yt-device-actions{display:flex;gap:8px;align-items:center}
-    .yt-device-open{padding:7px 16px;background:linear-gradient(135deg,#1a73e8,#4285f4);color:#fff;border:none;border-radius:var(--rs);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}
-    .yt-device-open:hover{filter:brightness(1.1)}
-    .yt-device-cancel{font-size:11px;color:var(--t3);background:none;border:none;cursor:pointer;text-decoration:underline}
-    .yt-device-cancel:hover{color:var(--t)}
+    .yt-login-panel{display:none;background:var(--card);border:1px solid var(--bds);border-radius:var(--rs);padding:14px 16px;flex-direction:column;gap:10px}
+    .yt-login-prompt{font-size:13px;color:var(--t2);line-height:1.5}
+    .yt-login-browsers{display:flex;gap:8px;flex-wrap:wrap}
+    .yt-browser-btn{padding:9px 18px;background:var(--surface);border:1px solid var(--bds);border-radius:var(--rs);color:var(--t);font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px}
+    .yt-browser-btn:hover{border-color:var(--bdr);background:var(--card)}
+    .yt-login-note{font-size:11px;color:var(--t3)}
     .yt-divider{display:flex;align-items:center;gap:12px;color:var(--t3);font-size:12px;margin:4px 0}
     .yt-divider::before,.yt-divider::after{content:'';flex:1;height:1px;background:var(--bds)}
     /* ── PROJECTS PANEL ── */
@@ -651,21 +645,19 @@ HTML = """<!DOCTYPE html>
         <button class="yt-cvt-btn" id="ytConvert">Convert</button>
       </div>
       <div class="yt-auth-row">
-        <span class="yt-auth-status"><span class="yt-auth-dot" id="ytAuthDot"></span><span id="ytAuthLabel">Not logged in &mdash; login required for YouTube Music Library</span></span>
+        <span class="yt-auth-status"><span class="yt-auth-dot" id="ytAuthDot"></span><span id="ytAuthLabel">Not logged in &mdash; required for YouTube Music Library</span></span>
         <button class="yt-auth-btn" id="ytLoginBtn">Login to YouTube</button>
         <button class="yt-auth-btn logout" id="ytLogoutBtn" style="display:none">Logout</button>
       </div>
-      <div class="yt-device-panel" id="ytDevicePanel">
-        <div class="yt-device-steps" id="ytDeviceSteps" style="display:none">
-          1. Open &nbsp;<span class="yt-device-url" id="ytDeviceUrl"></span><br>
-          2. Enter this code: &nbsp;<span class="yt-device-code" id="ytDeviceCode"></span>
+      <div class="yt-login-panel" id="ytLoginPanel">
+        <div class="yt-login-prompt">Choose a browser where you are (or will be) logged in to YouTube:</div>
+        <div class="yt-login-browsers">
+          <button class="yt-browser-btn" data-browser="firefox">&#127835; Firefox</button>
+          <button class="yt-browser-btn" data-browser="edge">&#128421; Edge</button>
+          <button class="yt-browser-btn" data-browser="opera">&#9711; Opera</button>
         </div>
-        <div style="font-size:12px;color:var(--t3);font-family:monospace;word-break:break-all" id="ytDeviceRaw">Getting authorization URL from YouTube...</div>
-        <div class="yt-device-actions">
-          <button class="yt-device-open" id="ytDeviceOpen" style="display:none">Open in browser</button>
-          <span style="font-size:12px;color:var(--t3)" id="ytDeviceWait"></span>
-          <button class="yt-device-cancel" id="ytDeviceCancel">Cancel</button>
-        </div>
+        <div class="yt-login-note">YouTube Music will open in the chosen browser. Log in if needed, then come back here and click Convert. Chrome is not supported (Google blocks external cookie access in Chrome 127+).</div>
+        <button class="yt-auth-btn logout" id="ytLoginCancel" style="align-self:flex-start">Cancel</button>
       </div>
       <div id="ytStatus" style="display:none;flex-direction:column;gap:8px">
         <div class="yt-prog-wrap">
@@ -1638,102 +1630,59 @@ HTML = """<!DOCTYPE html>
   var ytJobId = null;
   var ytPoll  = null;
 
-  // ── YOUTUBE AUTH (OAuth2 device flow) ──────────────────────────────
-  var ytOAuthPoll = null;
-
-  function ytSetAuthState(authenticated) {
-    var dot   = document.getElementById('ytAuthDot');
-    var label = document.getElementById('ytAuthLabel');
-    var login = document.getElementById('ytLoginBtn');
-    var logout= document.getElementById('ytLogoutBtn');
-    if (authenticated) {
-      dot.className   = 'yt-auth-dot ok';
-      label.textContent = 'Logged in to YouTube';
+  // ── YOUTUBE AUTH (browser cookie login) ────────────────────────────
+  function ytSetAuthState(browser) {
+    var dot    = document.getElementById('ytAuthDot');
+    var label  = document.getElementById('ytAuthLabel');
+    var login  = document.getElementById('ytLoginBtn');
+    var logout = document.getElementById('ytLogoutBtn');
+    if (browser) {
+      var name = browser.charAt(0).toUpperCase() + browser.slice(1);
+      dot.className        = 'yt-auth-dot ok';
+      label.textContent    = 'Logged in via ' + name + ' — YouTube Music downloads enabled';
       login.style.display  = 'none';
       logout.style.display = 'inline';
     } else {
-      dot.className   = 'yt-auth-dot';
-      label.textContent = 'Not logged in — login required for YouTube Music Library';
+      dot.className        = 'yt-auth-dot';
+      label.textContent    = 'Not logged in — required for YouTube Music Library';
       login.style.display  = 'inline';
       logout.style.display = 'none';
     }
   }
 
-  function ytCheckAuthOnLoad() {
-    fetch('/api/yt/oauth_status')
-      .then(function(r){return r.json();})
-      .then(function(d){ ytSetAuthState(d.authenticated); })
-      .catch(function(){});
-  }
-  ytCheckAuthOnLoad();
+  fetch('/api/yt/auth_status')
+    .then(function(r){return r.json();})
+    .then(function(d){ ytSetAuthState(d.browser); })
+    .catch(function(){});
 
   document.getElementById('ytLoginBtn').addEventListener('click', function() {
-    var btn = this;
-    btn.disabled = true; btn.textContent = 'Starting...';
-    var dot = document.getElementById('ytAuthDot');
-    dot.className = 'yt-auth-dot waiting';
-    fetch('/api/yt/start_oauth', {method:'POST'})
-      .then(function(r){return r.json();})
-      .then(function(d){
-        btn.disabled = false; btn.textContent = 'Login to YouTube';
-        if (d.error) { alert('Could not start login: ' + d.error); dot.className='yt-auth-dot'; return; }
-        document.getElementById('ytDevicePanel').style.display = 'flex';
-        ytPollOAuth();
-      })
-      .catch(function(e){ btn.disabled=false; btn.textContent='Login to YouTube'; dot.className='yt-auth-dot'; });
+    document.getElementById('ytLoginPanel').style.display = 'flex';
   });
 
-  document.getElementById('ytDeviceOpen').addEventListener('click', function() {
-    var url = document.getElementById('ytDeviceUrl').textContent;
-    fetch('/api/yt/open_url', {method:'POST', headers:{'Content-Type':'application/json'},
-                               body:JSON.stringify({url:url})});
-  });
-
-  document.getElementById('ytDeviceCancel').addEventListener('click', function() {
-    if (ytOAuthPoll) { clearInterval(ytOAuthPoll); ytOAuthPoll = null; }
-    document.getElementById('ytDevicePanel').style.display = 'none';
-    document.getElementById('ytAuthDot').className = 'yt-auth-dot';
-    fetch('/api/yt/cancel_oauth', {method:'POST'});
+  document.getElementById('ytLoginCancel').addEventListener('click', function() {
+    document.getElementById('ytLoginPanel').style.display = 'none';
   });
 
   document.getElementById('ytLogoutBtn').addEventListener('click', function() {
-    fetch('/api/yt/logout', {method:'POST'}).then(function(){ ytSetAuthState(false); });
+    fetch('/api/yt/logout', {method:'POST'}).then(function(){ ytSetAuthState(null); });
   });
 
-  function ytPollOAuth() {
-    if (ytOAuthPoll) clearInterval(ytOAuthPoll);
-    ytOAuthPoll = setInterval(function() {
-      fetch('/api/yt/oauth_status')
-        .then(function(r){return r.json();})
-        .then(function(d){
-          // Always show the raw yt-dlp message so nothing is ever blank
-          if (d.raw_message) {
-            document.getElementById('ytDeviceRaw').textContent = d.raw_message;
-          }
-          // If we parsed the structured URL + code, show the clean view
-          if (d.auth_url && d.user_code) {
-            document.getElementById('ytDeviceSteps').style.display = 'block';
-            document.getElementById('ytDeviceUrl').textContent  = d.auth_url;
-            document.getElementById('ytDeviceCode').textContent = d.user_code;
-            document.getElementById('ytDeviceOpen').style.display = 'inline';
-            document.getElementById('ytDeviceWait').textContent = 'Waiting for you to approve in the browser...';
-          } else if (d.auth_url) {
-            document.getElementById('ytDeviceOpen').style.display = 'inline';
-          }
-          if (d.authenticated) {
-            clearInterval(ytOAuthPoll); ytOAuthPoll = null;
-            document.getElementById('ytDevicePanel').style.display = 'none';
-            ytSetAuthState(true);
-          } else if (d.status === 'error') {
-            clearInterval(ytOAuthPoll); ytOAuthPoll = null;
-            var wait = document.getElementById('ytDeviceWait');
-            wait.textContent = 'Login failed — see the raw message above for details.';
-            wait.style.color = '#f87171';
-            document.getElementById('ytAuthDot').className = 'yt-auth-dot';
-          }
-        }).catch(function(){});
-    }, 2000);
-  }
+  document.querySelectorAll('.yt-browser-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var browser = this.getAttribute('data-browser');
+      fetch('/api/yt/select_browser', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({browser: browser})
+      })
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if (d.ok) {
+          document.getElementById('ytLoginPanel').style.display = 'none';
+          ytSetAuthState(d.browser);
+        }
+      });
+    });
+  });
 
   document.getElementById('ytUrl').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') document.getElementById('ytConvert').click();
@@ -2579,81 +2528,9 @@ def karaoke_export(jid):
 
 
 # ── YOUTUBE DOWNLOADER ───────────────────────────────────────────────
-_YT_OAUTH_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.yt_oauth_cache')
-_yt_oauth = {'status': 'idle', 'auth_url': None, 'user_code': None,
-             'thread': None, 'raw_message': None}
-
-def _is_oauth_authenticated():
-    """True only after an explicit successful login this session or a prior one."""
-    if _yt_oauth.get('status') == 'done':
-        return True
-    # yt-dlp writes a 'youtube' subdirectory containing token JSON after OAuth succeeds
-    youtube_cache = os.path.join(_YT_OAUTH_CACHE, 'youtube')
-    if not os.path.isdir(youtube_cache):
-        return False
-    return any(True for _ in os.scandir(youtube_cache))
-
-def _run_oauth_flow():
-    global _yt_oauth
-    try:
-        import yt_dlp
-        os.makedirs(_YT_OAUTH_CACHE, exist_ok=True)
-
-        class _OAuthLogger:
-            """Routes yt-dlp messages into _yt_oauth state."""
-            def debug(self, msg):   self._capture(msg)
-            def info(self, msg):    self._capture(msg)
-            def warning(self, msg): self._capture(msg)
-            def error(self, msg):
-                print(f'[YT OAuth] ERROR: {msg}')
-                _yt_oauth['raw_message'] = msg
-
-            def _capture(self, msg):
-                print(f'[YT OAuth] {msg}')
-                # Always store the most recent message so the UI can show it
-                _yt_oauth['raw_message'] = msg
-                low = msg.lower()
-
-                # Detect device-auth URL — broadened: any https URL near the auth prompt
-                if 'http' in low and ('device' in low or 'google' in low or 'youtube' in low or 'code' in low):
-                    url_m = re.search(r'https?://\S+', msg)
-                    if url_m:
-                        _yt_oauth['auth_url'] = url_m.group(0).rstrip('.,) ')
-                        _yt_oauth['status']   = 'pending'
-
-                # Detect user code — accept any alphanumeric 4-8 chars around "code"
-                if 'code' in low:
-                    # Try "XXXX-XXXX" format first, then loose word after "code"
-                    code_m = (re.search(r'\b([A-Z0-9]{4}[- ][A-Z0-9]{4})\b', msg, re.I) or
-                              re.search(r'code[:\s]+([A-Z0-9]{4,})', msg, re.I))
-                    if code_m:
-                        _yt_oauth['user_code'] = code_m.group(1).upper()
-
-                if 'success' in low or 'logged in' in low or 'authorized' in low:
-                    _yt_oauth['status'] = 'done'
-
-        ydl_opts = {
-            'username':      'oauth2',
-            'password':      '',
-            'cachedir':      _YT_OAUTH_CACHE,
-            'skip_download': True,
-            'noplaylist':    True,
-            'logger':        _OAuthLogger(),
-            'quiet':         False,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download(['https://www.youtube.com/watch?v=dQw4w9WgXcQ'])
-
-        if _is_oauth_authenticated() or _yt_oauth['status'] == 'pending':
-            _yt_oauth['status'] = 'done'
-        elif _yt_oauth['status'] not in ('done',):
-            _yt_oauth['status'] = 'error'
-    except Exception as ex:
-        if _yt_oauth['status'] not in ('done', 'pending'):
-            _yt_oauth['status'] = 'error'
-        print(f'[YT OAuth] Error: {ex}')
-    finally:
-        _yt_oauth['thread'] = None
+# Browser used for cookie-based auth; persists in memory for the session.
+# 'firefox' and 'edge' work; 'chrome' is blocked by App-Bound Encryption in Chrome 127+.
+_yt_browser = {'selected': None}
 
 def run_yt_download(jid, url):
     try:
@@ -2696,10 +2573,9 @@ def run_yt_download(jid, url):
             'restrictfilenames': True,
             'windowsfilenames':  True,
         }
-        if _is_oauth_authenticated() or _yt_oauth['status'] == 'done':
-            ydl_opts['username'] = 'oauth2'
-            ydl_opts['password'] = ''
-            ydl_opts['cachedir'] = _YT_OAUTH_CACHE
+        browser = _yt_browser.get('selected')
+        if browser:
+            ydl_opts['cookiesfrombrowser'] = (browser,)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info  = ydl.extract_info(url, download=True)
             title = info.get('title', 'audio') if info else 'audio'
@@ -2766,51 +2642,26 @@ def yt_file(jid):
                      mimetype='audio/mpeg')
 
 
-@app.route('/api/yt/start_oauth', methods=['POST'])
-def yt_start_oauth():
-    if _yt_oauth.get('thread') is not None:
-        return jsonify({'error': 'OAuth already in progress'}), 409
-    _yt_oauth.update({'status': 'starting', 'auth_url': None, 'user_code': None})
-    t = threading.Thread(target=_run_oauth_flow)
-    t.daemon = True
-    _yt_oauth['thread'] = t
-    t.start()
-    return jsonify({'ok': True})
+@app.route('/api/yt/select_browser', methods=['POST'])
+def yt_select_browser():
+    import webbrowser as _wb
+    data    = request.get_json() or {}
+    browser = data.get('browser', '').strip().lower()
+    if browser not in ('firefox', 'edge', 'opera'):
+        return jsonify({'error': 'Unsupported browser'}), 400
+    _yt_browser['selected'] = browser
+    _wb.open('https://music.youtube.com')
+    return jsonify({'ok': True, 'browser': browser})
 
 
-@app.route('/api/yt/oauth_status')
-def yt_oauth_status():
-    authed = _yt_oauth['status'] == 'done' or _is_oauth_authenticated()
-    return jsonify({
-        'status':        _yt_oauth['status'],
-        'auth_url':      _yt_oauth.get('auth_url'),
-        'user_code':     _yt_oauth.get('user_code'),
-        'raw_message':   _yt_oauth.get('raw_message'),
-        'authenticated': authed,
-    })
-
-
-@app.route('/api/yt/open_url', methods=['POST'])
-def yt_open_url():
-    import webbrowser
-    data = request.get_json() or {}
-    url  = data.get('url', 'https://google.com/device')
-    webbrowser.open(url)
-    return jsonify({'ok': True})
-
-
-@app.route('/api/yt/cancel_oauth', methods=['POST'])
-def yt_cancel_oauth():
-    _yt_oauth.update({'status': 'idle', 'auth_url': None, 'user_code': None, 'thread': None})
-    return jsonify({'ok': True})
+@app.route('/api/yt/auth_status')
+def yt_auth_status():
+    return jsonify({'browser': _yt_browser.get('selected')})
 
 
 @app.route('/api/yt/logout', methods=['POST'])
 def yt_logout():
-    import shutil
-    if os.path.isdir(_YT_OAUTH_CACHE):
-        shutil.rmtree(_YT_OAUTH_CACHE, ignore_errors=True)
-    _yt_oauth.update({'status': 'idle', 'auth_url': None, 'user_code': None})
+    _yt_browser['selected'] = None
     return jsonify({'ok': True})
 
 
