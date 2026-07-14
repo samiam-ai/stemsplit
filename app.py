@@ -1715,12 +1715,12 @@ HTML = """<!DOCTYPE html>
             clearInterval(ytOAuthPoll); ytOAuthPoll = null;
             document.getElementById('ytDevicePanel').style.display = 'none';
             ytSetAuthState(true);
-          }
-          if (d.status === 'error') {
+          } else if (d.status === 'error') {
             clearInterval(ytOAuthPoll); ytOAuthPoll = null;
-            document.getElementById('ytDevicePanel').style.display = 'none';
+            var wait = document.getElementById('ytDeviceWait');
+            wait.textContent = 'Login failed — check the app console for details, then try again.';
+            wait.style.color = '#f87171';
             document.getElementById('ytAuthDot').className = 'yt-auth-dot';
-            document.getElementById('ytAuthLabel').textContent = 'Login failed — try again';
           }
         }).catch(function(){});
     }, 2000);
@@ -2571,58 +2571,72 @@ def karaoke_export(jid):
 
 # ── YOUTUBE DOWNLOADER ───────────────────────────────────────────────
 _YT_OAUTH_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.yt_oauth_cache')
-_yt_oauth = {'status': 'idle', 'auth_url': None, 'user_code': None, 'proc': None}
+_yt_oauth = {'status': 'idle', 'auth_url': None, 'user_code': None, 'thread': None}
 
 def _is_oauth_authenticated():
-    """True if a cached OAuth token exists from a previous successful login."""
-    if not os.path.isdir(_YT_OAUTH_CACHE):
+    """True only after an explicit successful login this session or a prior one."""
+    if _yt_oauth.get('status') == 'done':
+        return True
+    # yt-dlp writes a 'youtube' subdirectory containing token JSON after OAuth succeeds
+    youtube_cache = os.path.join(_YT_OAUTH_CACHE, 'youtube')
+    if not os.path.isdir(youtube_cache):
         return False
-    for root, _, files in os.walk(_YT_OAUTH_CACHE):
-        for f in files:
-            if 'oauth' in f.lower() or f.endswith('.json'):
-                return True
-    return False
+    return any(True for _ in os.scandir(youtube_cache))
 
 def _run_oauth_flow():
     global _yt_oauth
     try:
-        import yt_dlp, sys
+        import yt_dlp
         os.makedirs(_YT_OAUTH_CACHE, exist_ok=True)
-        cmd = [sys.executable, '-m', 'yt_dlp',
-               '--username', 'oauth2', '--password', '',
-               '--cache-dir', _YT_OAUTH_CACHE,
-               '--skip-download', '--no-playlist', '--quiet',
-               'https://www.youtube.com/watch?v=dQw4w9WgXcQ']
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1, encoding='utf-8', errors='replace')
-        _yt_oauth['proc'] = proc
-        for line in iter(proc.stdout.readline, ''):
-            line = line.strip()
-            if not line:
-                continue
-            print(f'[YT OAuth] {line}')
-            low = line.lower()
-            # Device auth prompt: "go to https://... and enter code XXXX-XXXX"
-            if 'google.com' in low or 'youtube.com' in low or 'accounts.google' in low:
-                url_m  = re.search(r'https?://\S+', line)
-                code_m = re.search(r'(?:code[:\s]+|enter\s+)([A-Z0-9]{4}-[A-Z0-9]{4})', line, re.I)
-                if url_m:
-                    _yt_oauth['auth_url']  = url_m.group(0).rstrip('.,)')
-                    _yt_oauth['status']    = 'pending'
-                if code_m:
-                    _yt_oauth['user_code'] = code_m.group(1).upper()
-            if 'success' in low or 'logged in' in low or 'authorized' in low:
-                _yt_oauth['status'] = 'done'
-        proc.wait()
-        if proc.returncode == 0 or _is_oauth_authenticated():
+
+        class _OAuthLogger:
+            """Passes yt-dlp log messages to our OAuth state capture."""
+            def debug(self, msg):
+                self._capture(msg)
+            def info(self, msg):
+                self._capture(msg)
+            def warning(self, msg):
+                self._capture(msg)
+            def error(self, msg):
+                print(f'[YT OAuth] {msg}')
+            def _capture(self, msg):
+                print(f'[YT OAuth] {msg}')
+                low = msg.lower()
+                # yt-dlp prints: "To give yt-dlp access to your account,
+                #   go to  https://www.google.com/device  and enter code  ABCD-1234"
+                if 'google.com' in low or 'device' in low:
+                    url_m  = re.search(r'https?://\S+', msg)
+                    code_m = re.search(r'(?:enter\s+code|code)\s+([A-Z0-9]{4}-[A-Z0-9]{4})', msg, re.I)
+                    if url_m:
+                        _yt_oauth['auth_url'] = url_m.group(0).rstrip('.,) ')
+                        _yt_oauth['status']   = 'pending'
+                    if code_m:
+                        _yt_oauth['user_code'] = code_m.group(1).upper()
+                if 'success' in low or 'logged in' in low or 'authorized' in low:
+                    _yt_oauth['status'] = 'done'
+
+        ydl_opts = {
+            'username':      'oauth2',
+            'password':      '',
+            'cachedir':      _YT_OAUTH_CACHE,
+            'skip_download': True,
+            'noplaylist':    True,
+            'logger':        _OAuthLogger(),
+            'quiet':         False,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download(['https://www.youtube.com/watch?v=dQw4w9WgXcQ'])
+
+        if _is_oauth_authenticated() or _yt_oauth['status'] == 'pending':
             _yt_oauth['status'] = 'done'
         elif _yt_oauth['status'] not in ('done',):
             _yt_oauth['status'] = 'error'
     except Exception as ex:
-        _yt_oauth['status'] = 'error'
+        if _yt_oauth['status'] not in ('done', 'pending'):
+            _yt_oauth['status'] = 'error'
         print(f'[YT OAuth] Error: {ex}')
     finally:
-        _yt_oauth['proc'] = None
+        _yt_oauth['thread'] = None
 
 def run_yt_download(jid, url):
     try:
@@ -2737,11 +2751,13 @@ def yt_file(jid):
 
 @app.route('/api/yt/start_oauth', methods=['POST'])
 def yt_start_oauth():
-    if _yt_oauth.get('proc') is not None:
+    if _yt_oauth.get('thread') is not None:
         return jsonify({'error': 'OAuth already in progress'}), 409
     _yt_oauth.update({'status': 'starting', 'auth_url': None, 'user_code': None})
     t = threading.Thread(target=_run_oauth_flow)
-    t.daemon = True; t.start()
+    t.daemon = True
+    _yt_oauth['thread'] = t
+    t.start()
     return jsonify({'ok': True})
 
 
@@ -2767,11 +2783,7 @@ def yt_open_url():
 
 @app.route('/api/yt/cancel_oauth', methods=['POST'])
 def yt_cancel_oauth():
-    proc = _yt_oauth.get('proc')
-    if proc:
-        try: proc.terminate()
-        except Exception: pass
-    _yt_oauth.update({'status': 'idle', 'auth_url': None, 'user_code': None, 'proc': None})
+    _yt_oauth.update({'status': 'idle', 'auth_url': None, 'user_code': None, 'thread': None})
     return jsonify({'ok': True})
 
 
