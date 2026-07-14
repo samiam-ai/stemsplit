@@ -2574,7 +2574,15 @@ def run_yt_download(jid, url):
             'windowsfilenames':  True,
         }
         browser = _yt_browser.get('selected')
-        if browser and browser in ('firefox', 'edge', 'opera'):
+        print(f'[YT Download] url={url!r}  browser_selected={browser!r}')
+        if browser == 'chrome':
+            # Chrome 127+ blocks cookie access — clear and tell user to pick Firefox
+            _yt_browser['selected'] = None
+            yt_jobs[jid]['status']  = 'error'
+            yt_jobs[jid]['message'] = ('Chrome is not supported (cookie access blocked). '
+                                       'Click "Login to YouTube", choose Firefox or Edge, then try again.')
+            return
+        if browser in ('firefox', 'edge', 'opera'):
             ydl_opts['cookiesfrombrowser'] = (browser,)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info  = ydl.extract_info(url, download=True)
