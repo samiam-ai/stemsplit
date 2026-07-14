@@ -6,6 +6,7 @@ projects/
 
 # Secrets
 stemsplit_config.json
+yt_cookies.txt
 
 # Logs & flags
 flask_stdout.log

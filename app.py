@@ -512,6 +512,12 @@ HTML = """<!DOCTYPE html>
     .yt-music-hint{display:none;font-size:12px;color:#f0a500;background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.3);border-radius:var(--rs);padding:8px 12px;line-height:1.5}
     .yt-login-btn{padding:5px 12px;background:var(--card);border:1px solid var(--bds);border-radius:var(--rs);color:var(--t2);font-family:inherit;font-size:11px;cursor:pointer;white-space:nowrap;transition:all .2s}
     .yt-login-btn:hover{border-color:var(--bdr);color:var(--t)}
+    .yt-cookies-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0 2px}
+    .yt-cookies-lbl{font-size:12px;color:var(--t2);font-weight:500;white-space:nowrap}
+    .yt-cookies-file{font-size:11px;color:var(--t3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .yt-cookies-badge{font-size:10px;padding:2px 7px;background:rgba(124,58,237,.2);color:#a78bfa;border-radius:10px;white-space:nowrap}
+    .yt-cookies-clear{font-size:11px;color:var(--t3);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline}
+    .yt-cookies-clear:hover{color:var(--t)}
     .yt-divider{display:flex;align-items:center;gap:12px;color:var(--t3);font-size:12px;margin:4px 0}
     .yt-divider::before,.yt-divider::after{content:'';flex:1;height:1px;background:var(--bds)}
     /* ── PROJECTS PANEL ── */
@@ -647,12 +653,21 @@ HTML = """<!DOCTYPE html>
         <span class="yt-browser-lbl">&#127850; Browser cookies</span>
         <select id="ytBrowser" class="yt-browser-sel">
           <option value="">None (public videos only)</option>
+          <option value="firefox">Firefox (recommended)</option>
           <option value="chrome">Chrome</option>
-          <option value="firefox">Firefox</option>
           <option value="edge">Edge</option>
           <option value="opera">Opera</option>
         </select>
-        <span class="yt-browser-hint">Required for YouTube Music &amp; private videos &#8212; browser must be logged in to YouTube</span>
+        <span class="yt-browser-hint">For YouTube Music &amp; private videos &#8212; browser must be logged in. Chrome 127+ may not work; use Firefox or Edge.</span>
+      </div>
+      <div class="yt-cookies-row">
+        <span class="yt-cookies-lbl">&#128196; cookies.txt</span>
+        <input type="file" id="ytCookiesFile" accept=".txt" style="display:none">
+        <button class="yt-login-btn" id="ytCookiesUpload">Upload cookies.txt</button>
+        <span class="yt-cookies-file" id="ytCookiesName" style="display:none"></span>
+        <span class="yt-cookies-badge" id="ytCookiesBadge" style="display:none">active</span>
+        <button class="yt-cookies-clear" id="ytCookiesClear" style="display:none">remove</button>
+        <span class="yt-browser-hint" id="ytCookiesHint">Fallback: export cookies from any browser using the <b>Get cookies.txt LOCALLY</b> extension</span>
       </div>
       <div id="ytStatus" style="display:none;flex-direction:column;gap:8px">
         <div class="yt-prog-wrap">
@@ -1625,13 +1640,15 @@ HTML = """<!DOCTYPE html>
   var ytJobId = null;
   var ytPoll  = null;
 
+  var ytCookiesUploaded = false;
+
   function ytCheckMusicUrl() {
     var url = document.getElementById('ytUrl').value.trim();
     var isMusic = url.indexOf('music.youtube.com') !== -1;
     document.getElementById('ytMusicHint').style.display = isMusic ? 'block' : 'none';
-    if (isMusic) {
+    if (isMusic && !ytCookiesUploaded) {
       var sel = document.getElementById('ytBrowser');
-      if (!sel.value) sel.value = 'chrome';
+      if (!sel.value) sel.value = 'firefox';
     }
   }
   document.getElementById('ytUrl').addEventListener('input', ytCheckMusicUrl);
@@ -1643,6 +1660,42 @@ HTML = """<!DOCTYPE html>
   });
   document.getElementById('ytOpenBrowser').addEventListener('click', function() {
     fetch('/api/yt/open_login', {method:'POST'});
+  });
+
+  // cookies.txt upload
+  document.getElementById('ytCookiesUpload').addEventListener('click', function() {
+    document.getElementById('ytCookiesFile').click();
+  });
+  document.getElementById('ytCookiesFile').addEventListener('change', function() {
+    var f = this.files[0];
+    if (!f) return;
+    var fd = new FormData();
+    fd.append('cookies', f);
+    fetch('/api/yt/upload_cookies', {method:'POST', body:fd})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if (d.ok) {
+          ytCookiesUploaded = true;
+          document.getElementById('ytCookiesName').textContent = f.name;
+          document.getElementById('ytCookiesName').style.display = 'inline';
+          document.getElementById('ytCookiesBadge').style.display = 'inline';
+          document.getElementById('ytCookiesClear').style.display = 'inline';
+          document.getElementById('ytCookiesHint').style.display = 'none';
+          document.getElementById('ytBrowser').value = '';
+        } else {
+          alert('Upload failed: ' + (d.error || 'unknown error'));
+        }
+      });
+  });
+  document.getElementById('ytCookiesClear').addEventListener('click', function() {
+    fetch('/api/yt/clear_cookies', {method:'POST'}).then(function(){
+      ytCookiesUploaded = false;
+      document.getElementById('ytCookiesName').style.display = 'none';
+      document.getElementById('ytCookiesBadge').style.display = 'none';
+      document.getElementById('ytCookiesClear').style.display = 'none';
+      document.getElementById('ytCookiesHint').style.display = 'inline';
+      document.getElementById('ytCookiesFile').value = '';
+    });
   });
 
   document.getElementById('ytConvert').addEventListener('click', function() {
@@ -1659,7 +1712,8 @@ HTML = """<!DOCTYPE html>
 
     fetch('/api/yt/download', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({url:url, browser:document.getElementById('ytBrowser').value})
+      body:JSON.stringify({url:url, browser:document.getElementById('ytBrowser').value,
+                           use_cookies_file: ytCookiesUploaded})
     })
     .then(function(r){return r.json();})
     .then(function(d){
@@ -1698,13 +1752,22 @@ HTML = """<!DOCTYPE html>
             clearInterval(ytPoll);
             btn.disabled=false; btn.textContent='Convert';
             var msg = d.message || 'Unknown error';
-            var authMsg = 'Login required — select the browser where you are logged in to YouTube above, then try again.';
-            var authWords = ['sign in','login','not a bot','403','private video','members only','premium','unavailable'];
             var lmsg = msg.toLowerCase();
-            var isAuth = false;
-            for (var i=0; i<authWords.length; i++) { if (lmsg.indexOf(authWords[i])!==-1) { isAuth=true; break; } }
-            document.getElementById('ytMsg').textContent = 'Error: ' + (isAuth ? authMsg : msg);
-            if (isAuth) document.getElementById('ytMusicHint').style.display = 'block';
+            var displayMsg = msg;
+            if (lmsg.indexOf('could not copy chrome cookie') !== -1 || lmsg.indexOf('app-bound') !== -1) {
+              displayMsg = 'Chrome 127+ blocks cookie access. Fix: (1) try Firefox or Edge in the dropdown above, OR (2) use the cookies.txt upload — install the "Get cookies.txt LOCALLY" extension in Chrome, export from youtube.com, and upload it here.';
+              document.getElementById('ytBrowser').value = 'firefox';
+              document.getElementById('ytMusicHint').style.display = 'block';
+            } else {
+              var authWords = ['sign in','login','not a bot','403','private video','members only','premium','unavailable'];
+              var isAuth = false;
+              for (var i=0; i<authWords.length; i++) { if (lmsg.indexOf(authWords[i])!==-1) { isAuth=true; break; } }
+              if (isAuth) {
+                displayMsg = 'Login required — select the browser where you are logged in to YouTube above, or upload a cookies.txt file.';
+                document.getElementById('ytMusicHint').style.display = 'block';
+              }
+            }
+            document.getElementById('ytMsg').textContent = 'Error: ' + displayMsg;
           }
         }).catch(function(){});
     }, 1200);
@@ -2486,7 +2549,9 @@ def karaoke_export(jid):
 
 
 # ── YOUTUBE DOWNLOADER ───────────────────────────────────────────────
-def run_yt_download(jid, url, browser=''):
+_YT_COOKIES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yt_cookies.txt')
+
+def run_yt_download(jid, url, browser='', use_cookies_file=False):
     try:
         import yt_dlp
     except ImportError:
@@ -2527,8 +2592,10 @@ def run_yt_download(jid, url, browser=''):
             'restrictfilenames': True,
             'windowsfilenames':  True,
         }
-        # Use browser cookies for private/login-required content (e.g. YouTube Music)
-        if browser:
+        # cookies.txt file takes priority; browser cookies are the fallback
+        if use_cookies_file and os.path.exists(_YT_COOKIES_PATH):
+            ydl_opts['cookiefile'] = _YT_COOKIES_PATH
+        elif browser:
             ydl_opts['cookiesfrombrowser'] = (browser,)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info  = ydl.extract_info(url, download=True)
@@ -2565,11 +2632,12 @@ def yt_download():
         return jsonify({'error': 'No URL provided'}), 400
     if 'youtube.com' not in url and 'youtu.be' not in url:
         return jsonify({'error': 'Please provide a valid YouTube URL'}), 400
-    jid = str(uuid.uuid4())[:10]
-    browser = data.get('browser', '').strip().lower()
+    jid             = str(uuid.uuid4())[:10]
+    browser         = data.get('browser', '').strip().lower()
+    use_cookies_file = bool(data.get('use_cookies_file', False))
     yt_jobs[jid] = {'status':'processing','message':'Connecting to YouTube...','progress':0,
                     'path':None,'filename':'','title':''}
-    t = threading.Thread(target=run_yt_download, args=(jid, url, browser))
+    t = threading.Thread(target=run_yt_download, args=(jid, url, browser, use_cookies_file))
     t.daemon = True; t.start()
     return jsonify({'job_id': jid})
 
@@ -2602,6 +2670,22 @@ def yt_file(jid):
 def yt_open_login():
     import webbrowser
     webbrowser.open('https://music.youtube.com')
+    return jsonify({'ok': True})
+
+
+@app.route('/api/yt/upload_cookies', methods=['POST'])
+def yt_upload_cookies():
+    f = request.files.get('cookies')
+    if not f:
+        return jsonify({'error': 'No file uploaded'}), 400
+    f.save(_YT_COOKIES_PATH)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/yt/clear_cookies', methods=['POST'])
+def yt_clear_cookies():
+    if os.path.exists(_YT_COOKIES_PATH):
+        os.remove(_YT_COOKIES_PATH)
     return jsonify({'ok': True})
 
 
