@@ -2574,7 +2574,7 @@ def run_yt_download(jid, url):
             'windowsfilenames':  True,
         }
         browser = _yt_browser.get('selected')
-        if browser:
+        if browser and browser in ('firefox', 'edge', 'opera'):
             ydl_opts['cookiesfrombrowser'] = (browser,)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info  = ydl.extract_info(url, download=True)
