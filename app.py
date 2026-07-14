@@ -509,6 +509,9 @@ HTML = """<!DOCTYPE html>
     .yt-browser-sel{padding:5px 10px;background:var(--card);border:1px solid var(--bds);border-radius:var(--rs);color:var(--t);font-family:inherit;font-size:12px;cursor:pointer;outline:none}
     .yt-browser-sel:focus{border-color:var(--bdr)}
     .yt-browser-hint{font-size:11px;color:var(--t3);flex:1}
+    .yt-music-hint{display:none;font-size:12px;color:#f0a500;background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.3);border-radius:var(--rs);padding:8px 12px;line-height:1.5}
+    .yt-login-btn{padding:5px 12px;background:var(--card);border:1px solid var(--bds);border-radius:var(--rs);color:var(--t2);font-family:inherit;font-size:11px;cursor:pointer;white-space:nowrap;transition:all .2s}
+    .yt-login-btn:hover{border-color:var(--bdr);color:var(--t)}
     .yt-divider{display:flex;align-items:center;gap:12px;color:var(--t3);font-size:12px;margin:4px 0}
     .yt-divider::before,.yt-divider::after{content:'';flex:1;height:1px;background:var(--bds)}
     /* ── PROJECTS PANEL ── */
@@ -631,16 +634,20 @@ HTML = """<!DOCTYPE html>
 
   <div id="view-upload">
     <div class="yt-box">
-      <div class="yt-head">&#9654;&#65039; YouTube to MP3 <span class="yt-head-note">personal use only</span></div>
+      <div class="yt-head">&#9654;&#65039; YouTube / YouTube Music <span class="yt-head-note">personal use only</span></div>
       <div class="yt-row">
-        <input class="yt-inp" type="text" id="ytUrl" placeholder="Paste a YouTube URL and press Enter or Convert...">
+        <input class="yt-inp" type="text" id="ytUrl" placeholder="Paste a YouTube or YouTube Music URL...">
         <button class="yt-cvt-btn" id="ytConvert">Convert</button>
+      </div>
+      <div id="ytMusicHint" class="yt-music-hint">
+        &#127357; YouTube Music URL detected. To download from your library: make sure you are logged in to YouTube in the browser you select below, then click Convert.
+        <br><button class="yt-login-btn" id="ytOpenBrowser" style="margin-top:6px">Open YouTube Music in browser to log in</button>
       </div>
       <div class="yt-browser-row">
         <span class="yt-browser-lbl">&#127850; Browser cookies</span>
         <select id="ytBrowser" class="yt-browser-sel">
-          <option value="">None (public videos)</option>
-          <option value="chrome">Chrome (recommended)</option>
+          <option value="">None (public videos only)</option>
+          <option value="chrome">Chrome</option>
           <option value="firefox">Firefox</option>
           <option value="edge">Edge</option>
           <option value="opera">Opera</option>
@@ -1618,8 +1625,24 @@ HTML = """<!DOCTYPE html>
   var ytJobId = null;
   var ytPoll  = null;
 
+  function ytCheckMusicUrl() {
+    var url = document.getElementById('ytUrl').value.trim();
+    var isMusic = url.indexOf('music.youtube.com') !== -1;
+    document.getElementById('ytMusicHint').style.display = isMusic ? 'block' : 'none';
+    if (isMusic) {
+      var sel = document.getElementById('ytBrowser');
+      if (!sel.value) sel.value = 'chrome';
+    }
+  }
+  document.getElementById('ytUrl').addEventListener('input', ytCheckMusicUrl);
+  document.getElementById('ytUrl').addEventListener('paste', function() {
+    setTimeout(ytCheckMusicUrl, 0);
+  });
   document.getElementById('ytUrl').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') document.getElementById('ytConvert').click();
+  });
+  document.getElementById('ytOpenBrowser').addEventListener('click', function() {
+    fetch('/api/yt/open_login', {method:'POST'});
   });
 
   document.getElementById('ytConvert').addEventListener('click', function() {
@@ -1674,7 +1697,14 @@ HTML = """<!DOCTYPE html>
           } else if (d.status === 'error') {
             clearInterval(ytPoll);
             btn.disabled=false; btn.textContent='Convert';
-            document.getElementById('ytMsg').textContent = 'Error: '+d.message;
+            var msg = d.message || 'Unknown error';
+            var authMsg = 'Login required — select the browser where you are logged in to YouTube above, then try again.';
+            var authWords = ['sign in','login','not a bot','403','private video','members only','premium','unavailable'];
+            var lmsg = msg.toLowerCase();
+            var isAuth = false;
+            for (var i=0; i<authWords.length; i++) { if (lmsg.indexOf(authWords[i])!==-1) { isAuth=true; break; } }
+            document.getElementById('ytMsg').textContent = 'Error: ' + (isAuth ? authMsg : msg);
+            if (isAuth) document.getElementById('ytMusicHint').style.display = 'block';
           }
         }).catch(function(){});
     }, 1200);
@@ -2517,8 +2547,12 @@ def run_yt_download(jid, url, browser=''):
             yt_jobs[jid]['status']  = 'error'
             yt_jobs[jid]['message'] = 'MP3 not found after conversion. FFmpeg may be missing.'
     except Exception as e:
-        # Strip ANSI color codes from yt-dlp error messages
         msg = re.sub(r'\x1b\[[0-9;]*m', '', str(e))
+        auth_kw = ['sign in', 'login', 'not a bot', '403', 'private video',
+                   'members only', 'premium', 'unavailable', 'age']
+        if any(k in msg.lower() for k in auth_kw):
+            msg = ('Login required. Select the browser where you are logged in to '
+                   'YouTube in the "Browser cookies" selector, then try again.')
         yt_jobs[jid]['status']  = 'error'
         yt_jobs[jid]['message'] = msg
 
@@ -2562,6 +2596,13 @@ def yt_file(jid):
     return send_file(p, as_attachment=True,
                      download_name=job.get('filename','audio.mp3'),
                      mimetype='audio/mpeg')
+
+
+@app.route('/api/yt/open_login', methods=['POST'])
+def yt_open_login():
+    import webbrowser
+    webbrowser.open('https://music.youtube.com')
+    return jsonify({'ok': True})
 
 
 @app.route('/api/yt/separate/<yt_jid>', methods=['POST'])
