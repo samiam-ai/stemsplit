@@ -13,6 +13,7 @@ jobs    = {}
 yt_jobs      = {}
 replace_jobs = {}
 split_jobs   = {}
+browse_jobs  = {}
 WORKER = 'http://127.0.0.1:5001'
 
 # ── WORKER PROXY ─────────────────────────────────────────────────────
@@ -504,6 +505,15 @@ HTML = """<!DOCTYPE html>
     .yt-sep-btn{flex:1;padding:9px 16px;background:linear-gradient(135deg,#7C3AED,#9D6FF7);color:#fff;border:none;border-radius:var(--rs);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;box-shadow:0 3px 10px rgba(124,58,237,.35)}
     .yt-sep-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 5px 14px rgba(124,58,237,.5)}
     .yt-sep-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+    .yt-browse-btn{background:#1565c0;color:#fff;border:none;padding:6px 13px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap}
+    .yt-browse-btn:hover:not(:disabled){background:#1976d2}
+    .yt-browse-btn:disabled{opacity:.55;cursor:default}
+    .yt-browse-status{font-size:11px;color:var(--t3);padding:3px 0 0;line-height:1.5;display:none}
+    .yt-stream-hint{font-size:11px;color:var(--t3);padding:4px 0 2px;line-height:1.5}
+    .yt-stream-hint-toggle{cursor:pointer;color:var(--acc);text-decoration:underline;text-underline-offset:2px}
+    .yt-stream-hint-body{display:none;margin-left:6px}
+    .yt-stream-hint-body.open{display:inline}
+    .yt-stream-hint-body code{background:var(--bg2);padding:1px 4px;border-radius:3px;font-size:10px}
     .yt-auth-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0 2px;min-height:32px}
     .yt-auth-status{font-size:12px;display:flex;align-items:center;gap:6px;flex:1}
     .yt-auth-dot{width:8px;height:8px;border-radius:50%;background:var(--t3);flex-shrink:0}
@@ -641,14 +651,20 @@ HTML = """<!DOCTYPE html>
     <div class="yt-box">
       <div class="yt-head">&#9654;&#65039; YouTube / YouTube Music <span class="yt-head-note">personal use only</span></div>
       <div class="yt-row">
-        <input class="yt-inp" type="text" id="ytUrl" placeholder="Paste a YouTube or YouTube Music URL...">
+        <input class="yt-inp" type="text" id="ytUrl" placeholder="Paste a YouTube URL or stream URL from DevTools...">
         <button class="yt-cvt-btn" id="ytConvert">Convert</button>
+      </div>
+      <div class="yt-stream-hint">
+        <span class="yt-stream-hint-toggle" id="ytStreamHintToggle">&#9432; YouTube Music personal uploads?</span>
+        <span class="yt-stream-hint-body" id="ytStreamHintBody">In Firefox: <strong>F12</strong> &rarr; Network &rarr; type <code>googlevideo</code> in the filter box &rarr; play the song &rarr; right-click any matching request &rarr; <strong>Copy URL</strong> &rarr; paste here.</span>
       </div>
       <div class="yt-auth-row">
         <span class="yt-auth-status"><span class="yt-auth-dot" id="ytAuthDot"></span><span id="ytAuthLabel">Not logged in &mdash; required for YouTube Music Library</span></span>
         <button class="yt-auth-btn" id="ytLoginBtn">Login to YouTube</button>
         <button class="yt-auth-btn logout" id="ytLogoutBtn" style="display:none">Logout</button>
+        <button class="yt-browse-btn" id="ytBrowseBtn">&#128269; Browse Library</button>
       </div>
+      <div class="yt-browse-status" id="ytBrowseStatus"></div>
       <div class="yt-login-panel" id="ytLoginPanel">
         <div class="yt-login-prompt">Choose a browser where you are (or will be) logged in to YouTube:</div>
         <div class="yt-login-browsers">
@@ -1684,6 +1700,81 @@ HTML = """<!DOCTYPE html>
     });
   });
 
+  document.getElementById('ytStreamHintToggle').addEventListener('click', function() {
+    var body = document.getElementById('ytStreamHintBody');
+    body.classList.toggle('open');
+  });
+
+  var ytBrowseId = null, ytBrowsePoll = null;
+
+  document.getElementById('ytBrowseBtn').addEventListener('click', function() {
+    var btn = this;
+    if (ytBrowsePoll) clearInterval(ytBrowsePoll);
+    btn.disabled = true;
+    btn.textContent = 'Opening...';
+    var statusEl = document.getElementById('ytBrowseStatus');
+    statusEl.style.display = 'block';
+    statusEl.textContent = 'Launching embedded YouTube Music browser...';
+
+    fetch('/api/ytmusic/browse', {method:'POST'})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if (d.error) {
+          btn.disabled=false; btn.innerHTML='&#128269; Browse Library';
+          statusEl.textContent = 'Error: ' + d.error;
+          return;
+        }
+        ytBrowseId = d.browse_id;
+        ytBrowsePoll = setInterval(function() {
+          fetch('/api/ytmusic/browse_status/' + ytBrowseId)
+            .then(function(r){return r.json();})
+            .then(function(s){
+              if (s.message) statusEl.textContent = s.message;
+              if (s.status === 'captured') {
+                clearInterval(ytBrowsePoll);
+                btn.disabled=false; btn.innerHTML='&#128269; Browse Library';
+                statusEl.style.display = 'none';
+                // Kick off the download automatically
+                var url = s.url, titleHint = s.title || 'YouTube Music Upload';
+                document.getElementById('ytUrl').value = url;
+                document.getElementById('ytStatus').style.display  = 'flex';
+                document.getElementById('ytResult').style.display  = 'none';
+                document.getElementById('ytProgFill').style.width  = '0%';
+                document.getElementById('ytProgPct').textContent   = '0%';
+                document.getElementById('ytMsg').textContent       = 'Downloading stream...';
+                fetch('/api/yt/download', {
+                  method:'POST', headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({url:url, title_hint:titleHint})
+                })
+                .then(function(r){return r.json();})
+                .then(function(dl){
+                  if (dl.error) {
+                    document.getElementById('ytMsg').textContent='Error: '+dl.error;
+                    return;
+                  }
+                  ytJobId = dl.job_id;
+                  pollYtStatus(document.getElementById('ytConvert'));
+                }).catch(function(e){
+                  document.getElementById('ytMsg').textContent='Error: '+e.message;
+                });
+              } else if (s.status === 'error') {
+                clearInterval(ytBrowsePoll);
+                btn.disabled=false; btn.innerHTML='&#128269; Browse Library';
+                statusEl.textContent = 'Error: ' + (s.message || 'Unknown error');
+              } else if (s.status === 'cancelled') {
+                clearInterval(ytBrowsePoll);
+                btn.disabled=false; btn.innerHTML='&#128269; Browse Library';
+                statusEl.style.display = 'none';
+              }
+            }).catch(function(){});
+        }, 1500);
+      })
+      .catch(function(e){
+        btn.disabled=false; btn.innerHTML='&#128269; Browse Library';
+        statusEl.textContent = 'Error: ' + e.message;
+      });
+  });
+
   document.getElementById('ytUrl').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') document.getElementById('ytConvert').click();
   });
@@ -2532,7 +2623,580 @@ def karaoke_export(jid):
 # 'firefox' and 'edge' work; 'chrome' is blocked by App-Bound Encryption in Chrome 127+.
 _yt_browser = {'selected': None}
 
-def run_yt_download(jid, url):
+
+# JavaScript injected into the embedded YouTube Music browser.
+# Intercepts audio stream fetch calls and shows a Download button overlay.
+# The banner that appears briefly confirms the injection ran.
+_YTMUSIC_INJECT_JS = """\
+(function(){
+  if(window.__ss_injected)return;
+  window.__ss_injected=true;
+  try{Object.defineProperty(navigator,'webdriver',{get:()=>undefined});}catch(e){}
+
+  // Brief "connected" banner so the user knows injection is active
+  try{
+    var _banner=document.createElement('div');
+    _banner.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);'
+      +'z-index:2147483647;background:#2e7d32;color:#fff;padding:7px 18px;'
+      +'border-radius:8px;font-family:system-ui,sans-serif;font-size:13px;'
+      +'font-weight:600;pointer-events:none;opacity:1;transition:opacity .5s';
+    _banner.textContent='StemSplit connected ✓ — play a song to capture it';
+    document.body.appendChild(_banner);
+    setTimeout(function(){_banner.style.opacity='0';
+      setTimeout(function(){if(_banner.parentNode)_banner.parentNode.removeChild(_banner);},600);
+    },3000);
+  }catch(e){}
+
+  var _cap=null;
+
+  function _cleanUrl(url){
+    try{
+      var u=new URL(url);
+      u.searchParams.delete('range');
+      u.searchParams.delete('ump');
+      return u.toString();
+    }catch(e){return url;}
+  }
+
+  function _showBtn(url){
+    try{
+      var mime=new URL(url).searchParams.get('mime')||'';
+      // Reject only when mime is explicitly a non-audio type (e.g. video/mp4).
+      // Personal upload URLs may have no mime param at all — allow those through.
+      if(mime && mime.indexOf('audio')===-1)return;
+    }catch(e){}
+    var clean=_cleanUrl(url);
+    if(_cap===clean)return;
+    _cap=clean;
+    var b=document.getElementById('__ss_dl_btn');
+    if(!b){
+      b=document.createElement('div');
+      b.id='__ss_dl_btn';
+      b.style.cssText='position:fixed;bottom:24px;right:24px;z-index:2147483647;'
+        +'background:#1565c0;color:#fff;font-family:system-ui,sans-serif;'
+        +'font-size:15px;font-weight:700;padding:14px 22px;border-radius:12px;'
+        +'cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,.5);user-select:none;'
+        +'transition:background .15s;letter-spacing:.3px';
+      b.addEventListener('click',function(){
+        var t=(document.title||'').replace(/ - YouTube Music$/,'').trim()||'YouTube Music Upload';
+        b.textContent='\\u2713 Sending to StemSplit...';
+        b.style.background='#2e7d32';
+        b.style.cursor='default';
+        window.pywebview.api.capture_and_close(_cap,t);
+      });
+      document.body.appendChild(b);
+    }
+    b.textContent='\\u2B07 Download to StemSplit';
+    b.style.background='#1565c0';
+    b.style.cursor='pointer';
+  }
+
+  // PerformanceObserver — fires for new resource entries as they happen
+  try{
+    new PerformanceObserver(function(l){
+      l.getEntries().forEach(function(e){
+        if(e.name&&_isAudioCdn(e.name))_showBtn(e.name);
+      });
+    }).observe({entryTypes:['resource']});
+  }catch(e){}
+
+  // Audio CDN domains for YouTube / YouTube Music personal uploads.
+  // Checked against the URL hostname (suffix match), not the raw URL string.
+  var _AUDIO_DOMAINS=[
+    'googlevideo.com',
+    'googleusercontent.com',
+    'gvt1.com',
+    'c.youtube.com'
+  ];
+  function _isAudioCdn(url){
+    try{
+      var h=new URL(url).hostname;
+      for(var i=0;i<_AUDIO_DOMAINS.length;i++){
+        var d=_AUDIO_DOMAINS[i];
+        if(h===d||h.slice(-(d.length+1))==='.' +d)return true;
+      }
+    }catch(e){}
+    return false;
+  }
+
+  // Primary detection: real-time fetch patch
+  var _oF2=window.fetch;
+  window.fetch=function(){
+    var u=typeof arguments[0]==='string'?arguments[0]:(arguments[0]&&arguments[0].url||'');
+    if(u&&_isAudioCdn(u))_showBtn(u);
+    return _oF2.apply(this,arguments);
+  };
+
+  // Polling fallback: scan full performance timeline every 2 s.
+  // Chromium records ALL resource loads (including Service Worker / Web Worker)
+  // in the main document's performance timeline.
+  setInterval(function(){
+    try{
+      var es=performance.getEntriesByType('resource');
+      for(var i=es.length-1;i>=0;i--){
+        var n=es[i].name;
+        if(n&&_isAudioCdn(n)){_showBtn(n);return;}
+      }
+    }catch(e){}
+  },2000);
+})();
+"""
+
+
+def _run_ytmusic_browser(bid):
+    """Open an embedded YouTube Music browser via pywebview and capture a stream URL."""
+    import subprocess, sys, tempfile, json as _json
+
+    result_path = os.path.join(tempfile.gettempdir(), f'ss_browse_{bid}.json')
+    script_path = os.path.join(tempfile.gettempdir(), f'ss_browse_{bid}.py')
+    storage_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.ytmusic_session')
+
+    js_literal   = _json.dumps(_YTMUSIC_INJECT_JS)
+    res_literal  = _json.dumps(result_path)
+    stor_literal = _json.dumps(storage_dir)
+
+    # Helper runs pywebview in its own process to avoid GUI-thread conflicts.
+    # Uses webview.start(func=_startup) where _startup retries evaluate_js until
+    # it succeeds — more reliable than events.loaded which fires after page JS.
+    helper = (
+        'import json, webview, time, threading\n'
+        f'_JS={js_literal}\n'
+        f'_RES={res_literal}\n'
+        f'_STOR={stor_literal}\n'
+        '_cap={}\n'
+        '_close_event = threading.Event()\n'
+        '\n'
+        'class _Api:\n'
+        '    def capture_and_close(self, url, title="YouTube Music Upload"):\n'
+        '        _cap["url"] = url\n'
+        '        _cap["title"] = title\n'
+        '        _close_event.set()\n'
+        '\n'
+        '_win = webview.create_window(\n'
+        '    "YouTube Music - StemSplit",\n'
+        '    "https://music.youtube.com",\n'
+        '    js_api=_Api(), width=1280, height=820)\n'
+        '\n'
+        'def _startup():\n'
+        '    time.sleep(2)\n'
+        '    for attempt in range(40):\n'
+        '        try:\n'
+        '            _win.evaluate_js(_JS)\n'
+        '            break\n'
+        '        except Exception:\n'
+        '            time.sleep(0.5)\n'
+        '    _last_reinject = time.time()\n'
+        '    while True:\n'
+        '        time.sleep(0.5)\n'
+        '        if _close_event.is_set():\n'
+        '            try: _win.destroy()\n'
+        '            except Exception: pass\n'
+        '            break\n'
+        '        if time.time() - _last_reinject >= 4:\n'
+        '            _last_reinject = time.time()\n'
+        '            try: _win.evaluate_js(_JS)\n'
+        '            except Exception: break\n'
+        '\n'
+        f'webview.start(func=_startup, storage_path=_STOR, private_mode=False)\n'
+        'with open(_RES, "w") as f:\n'
+        '    json.dump(_cap, f)\n'
+    )
+
+    try:
+        os.makedirs(storage_dir, exist_ok=True)
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(helper)
+
+        browse_jobs[bid]['status']  = 'open'
+        browse_jobs[bid]['message'] = (
+            'YouTube Music is open — play a song then click "Download to StemSplit"')
+
+        proc = subprocess.Popen([sys.executable, script_path])
+        proc.wait()
+
+        if proc.returncode != 0 and not os.path.exists(result_path):
+            browse_jobs[bid]['status']  = 'error'
+            browse_jobs[bid]['message'] = (
+                'Browser process failed — check Flask console for details. '
+                'If pywebview is missing: pip install pywebview')
+            return
+
+        if os.path.exists(result_path):
+            with open(result_path, encoding='utf-8') as f:
+                result = _json.load(f)
+            if result.get('url'):
+                browse_jobs[bid]['url']    = result['url']
+                browse_jobs[bid]['title']  = result.get('title', 'YouTube Music Upload')
+                browse_jobs[bid]['status'] = 'captured'
+            else:
+                browse_jobs[bid]['status']  = 'cancelled'
+                browse_jobs[bid]['message'] = 'Browser closed without selecting a song'
+        else:
+            browse_jobs[bid]['status']  = 'cancelled'
+            browse_jobs[bid]['message'] = 'Browser closed without selecting a song'
+
+    except Exception as e:
+        browse_jobs[bid]['status']  = 'error'
+        browse_jobs[bid]['message'] = str(e)
+    finally:
+        for p in (script_path, result_path):
+            try:
+                if os.path.exists(p):
+                    os.unlink(p)
+            except Exception:
+                pass
+
+
+def _is_direct_stream_url(url):
+    """Return True for direct audio/video stream URLs copied from browser DevTools."""
+    import urllib.parse as _up
+    try:
+        netloc = _up.urlparse(url).netloc
+        path   = _up.urlparse(url).path
+        # c.youtube.com: personal upload CDN (rr*.c.youtube.com/videoplayback)
+        if netloc == 'c.youtube.com' or netloc.endswith('.c.youtube.com'):
+            return True
+        return ('googlevideo.com' in netloc or
+                'googleusercontent.com' in netloc or
+                'gvt1.com' in netloc or
+                ('youtube.com' in netloc and '/videoplayback' in path))
+    except Exception:
+        return False
+
+
+def _run_direct_stream_download(jid, url, title_hint=''):
+    """Download a direct stream URL (e.g. from Firefox DevTools) and convert to MP3."""
+    import urllib.parse as _up, requests as _req
+
+    out_dir = os.path.join(YT_DIR, jid)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Determine extension from mime= param in URL
+    try:
+        params = dict(_up.parse_qsl(_up.urlparse(url).query))
+        mime   = params.get('mime', '').lower()
+    except Exception:
+        mime = ''
+    if 'mp4' in mime:
+        ext = 'm4a'
+    elif 'ogg' in mime:
+        ext = 'ogg'
+    else:
+        ext = 'webm'
+
+    raw_path = os.path.join(out_dir, f'stream.{ext}')
+    mp3_path = os.path.join(out_dir, 'audio.mp3')
+
+    # --- Download -------------------------------------------------------
+    yt_jobs[jid]['message'] = 'Downloading stream...'
+    try:
+        hdrs = {'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64; '
+                               'rv:88.0) Gecko/20100101 Firefox/88.0'),
+                'Referer': 'https://music.youtube.com/'}
+        with _req.get(url, stream=True, timeout=120, headers=hdrs) as r:
+            r.raise_for_status()
+            total      = int(r.headers.get('content-length', 0))
+            downloaded = 0
+            with open(raw_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            pct = int(downloaded / total * 80)
+                            mb_dl  = downloaded / (1024 * 1024)
+                            mb_tot = total / (1024 * 1024)
+                            yt_jobs[jid]['progress'] = pct
+                            yt_jobs[jid]['message']  = (f'Downloading... '
+                                                         f'{mb_dl:.1f} / {mb_tot:.1f} MB')
+    except Exception as e:
+        yt_jobs[jid]['status']  = 'error'
+        yt_jobs[jid]['message'] = f'Download failed: {e}'
+        return
+
+    # --- Convert to MP3 -------------------------------------------------
+    yt_jobs[jid]['message']  = 'Converting to MP3...'
+    yt_jobs[jid]['progress'] = 85
+    try:
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(raw_path)
+        audio.export(mp3_path, format='mp3', bitrate='320k')
+        try:
+            os.remove(raw_path)
+        except Exception:
+            pass
+    except Exception as e:
+        yt_jobs[jid]['status']  = 'error'
+        yt_jobs[jid]['message'] = f'Conversion failed: {e}'
+        return
+
+    yt_jobs[jid]['status']   = 'done'
+    yt_jobs[jid]['path']     = os.path.abspath(mp3_path)
+    yt_jobs[jid]['filename'] = 'audio.mp3'
+    yt_jobs[jid]['title']    = title_hint or 'YouTube Music Upload'
+    yt_jobs[jid]['progress'] = 100
+    yt_jobs[jid]['message']  = 'Complete!'
+
+
+def _ytmusic_try(jid, url, browser):
+    """
+    Download a YouTube Music personal upload via ytmusicapi, which calls the
+    YouTube Music innertube API directly and avoids the GVS PO Token issue
+    that blocks yt-dlp's web_music client.
+    Returns True on success, False to fall through to regular error handling.
+    """
+    try:
+        from ytmusicapi import YTMusic
+    except ImportError:
+        print('[YTMusic] ytmusicapi not installed — skipping')
+        return False
+
+    m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
+    if not m:
+        return False
+    video_id = m.group(1)
+
+    out_dir = os.path.join(YT_DIR, jid)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Build browser auth for ytmusicapi from Firefox cookies.
+    # ytmusicapi 1.12+ requires an 'authorization: SAPISIDHASH ...' header to
+    # detect browser auth (vs OAuth). The hash is derived from __Secure-3PAPISID.
+    auth = None
+    if browser in ('firefox', 'edge', 'opera'):
+        try:
+            import yt_dlp as _ydlp, time as _time
+            from hashlib import sha1 as _sha1
+            cookies_dict = {}
+            with _ydlp.YoutubeDL({'quiet': True, 'no_warnings': True,
+                                   'cookiesfrombrowser': (browser,)}) as _ydl:
+                for _c in _ydl.cookiejar:
+                    _d = getattr(_c, 'domain', '') or ''
+                    if 'youtube.com' in _d or 'google.com' in _d:
+                        cookies_dict[_c.name] = _c.value
+            cookie_str = '; '.join(f'{k}={v}' for k, v in cookies_dict.items())
+            sapisid = (cookies_dict.get('__Secure-3PAPISID')
+                       or cookies_dict.get('SAPISID', ''))
+            print(f'[YTMusic] extracted {len(cookies_dict)} yt/google cookies, '
+                  f'SAPISID={"found" if sapisid else "MISSING"}')
+            if cookie_str and sapisid:
+                _ts  = str(int(_time.time()))
+                _sha = _sha1()
+                _sha.update(f'{_ts} {sapisid} https://music.youtube.com'.encode())
+                _authz = f'SAPISIDHASH {_ts}_{_sha.hexdigest()}'
+                auth = {
+                    'cookie':          cookie_str,
+                    'authorization':   _authz,
+                    'x-goog-authuser': '0',
+                    'user-agent':      ('Mozilla/5.0 (Windows NT 10.0; Win64; x64; '
+                                        'rv:88.0) Gecko/20100101 Firefox/88.0'),
+                    'accept':          '*/*',
+                    'content-type':    'application/json',
+                    'origin':          'https://music.youtube.com',
+                }
+            elif cookie_str:
+                print('[YTMusic] SAPISID missing — cannot build SAPISIDHASH; '
+                      'make sure you are logged into YouTube in Firefox')
+        except Exception as _e:
+            print(f'[YTMusic] cookie extraction: {_e}')
+
+    try:
+        yt = YTMusic(auth=auth)
+        print(f'[YTMusic] auth_type={yt.auth_type}  '
+              f'sapisid={getattr(yt,"sapisid","?")[:12]}...  '
+              f'origin={getattr(yt,"origin","?")}')
+    except Exception as _e:
+        print(f'[YTMusic] init: {_e}')
+        return False
+
+    # Quick auth sanity-check: can we list the upload library?
+    try:
+        uploads = yt.get_library_upload_songs(limit=3)
+        print(f'[YTMusic] library auth OK — {len(uploads)} upload(s) visible')
+        for u in uploads:
+            print(f'  videoId={u.get("videoId")} title={u.get("title")}')
+    except Exception as _e:
+        print(f'[YTMusic] library auth FAILED: {_e}')
+
+    # Direct player API call replicating yt-dlp's web_music flow:
+    # 1. warm the session by visiting the watch page (sets ephemeral cookies)
+    # 2. call the player API with the warm session
+    yt_jobs[jid]['message'] = 'Fetching YouTube Music stream info...'
+    song = None
+    try:
+        import requests as _req, time as _t
+        from hashlib import sha1 as _sha1
+
+        _cookie_base = auth.get('cookie', '') if auth else ''
+        if 'SOCS=' not in _cookie_base:
+            _cookie_base = (_cookie_base + '; SOCS=CAI').lstrip('; ')
+
+        def _make_authz(sapisid):
+            _ts = str(int(_t.time()))
+            _sh = _sha1()
+            _sh.update(f'{_ts} {sapisid} https://music.youtube.com'.encode())
+            return f'SAPISIDHASH {_ts}_{_sh.hexdigest()}'
+
+        _base_hdrs = {
+            'cookie':          _cookie_base,
+            'authorization':   _make_authz(yt.sapisid),
+            'x-goog-authuser': '0',
+            'origin':          'https://music.youtube.com',
+            'user-agent':      ('Mozilla/5.0 (Windows NT 10.0; Win64; x64; '
+                                'rv:88.0) Gecko/20100101 Firefox/88.0'),
+            'accept-language': 'en-US,en;q=0.9',
+        }
+
+        # Step 1: warm session — visit the watch page to collect ephemeral cookies
+        _sess = _req.Session()
+        _sess.headers.update(_base_hdrs)
+        _watch = _sess.get(
+            f'https://www.youtube.com/watch?v={video_id}',
+            timeout=20, allow_redirects=True,
+        )
+        print(f'[YTMusic] watch page status={_watch.status_code}  '
+              f'new session cookies: {list(_sess.cookies.keys())}')
+
+        # Step 2: player API with warmed session
+        _body = {
+            'context': {
+                'client': {
+                    'clientName': 'WEB_REMIX',
+                    'clientVersion': '1.20260715.01.00',
+                    'hl': 'en',
+                },
+                'user': {},
+            },
+            'playbackContext': {
+                'contentPlaybackContext': {'signatureTimestamp': 20000}
+            },
+            'videoId': video_id,
+        }
+        _sess.headers.update({
+            'content-type': 'application/json',
+            'authorization': _make_authz(yt.sapisid),
+        })
+        _r = _sess.post(
+            'https://www.youtube.com/youtubei/v1/player',
+            json=_body, timeout=30,
+        )
+        _resp = _r.json()
+        _play = _resp.get('playabilityStatus', {}).get('status')
+        _fmts = (_resp.get('streamingData', {}).get('adaptiveFormats', []) +
+                 _resp.get('streamingData', {}).get('formats', []))
+        print(f'[YTMusic/session] status={_r.status_code}  '
+              f'playability={_play}  formats={len(_fmts)}')
+        for _f in _fmts[:4]:
+            print(f'  mime={_f.get("mimeType","?")}  '
+                  f'url={"yes" if "url" in _f else "no"}  '
+                  f'bitrate={_f.get("bitrate",0)}')
+        song = _resp
+    except Exception as _e:
+        print(f'[YTMusic/session] error: {_e}')
+        try:
+            song = yt.get_song(video_id)
+        except Exception as _e2:
+            print(f'[YTMusic] get_song fallback: {_e2}')
+            return False
+
+    playability = song.get('playabilityStatus', {})
+    print(f'[YTMusic] playabilityStatus: {playability.get("status")} — '
+          f'{playability.get("reason", "")}')
+    streaming = song.get('streamingData', {})
+    all_fmts  = (streaming.get('adaptiveFormats', []) +
+                 streaming.get('formats', []))
+    print(f'[YTMusic] {len(all_fmts)} total formats:')
+    for _f in all_fmts:
+        print(f'  mime={_f.get("mimeType","?")}  url={"yes" if "url" in _f else "no"}'
+              f'  cipher={"yes" if "signatureCipher" in _f else "no"}'
+              f'  bitrate={_f.get("bitrate",0)}')
+
+    # Audio-only formats that have a direct URL (not cipher-protected)
+    audio = [f for f in all_fmts
+             if 'audio' in f.get('mimeType', '')
+             and 'video' not in f.get('mimeType', '')
+             and f.get('url')]
+    if not audio:
+        print('[YTMusic] no usable audio formats with direct URL')
+        return False
+
+    best  = max(audio, key=lambda f: f.get('bitrate', 0) or 0)
+    s_url = best['url']
+    mime  = best.get('mimeType', 'audio/webm')
+    ext   = 'webm' if 'webm' in mime else 'm4a'
+    print(f'[YTMusic] best format: {mime} @ {best.get("bitrate",0)//1000}kbps')
+
+    title = (song.get('videoDetails', {}).get('title')
+             or song.get('microformat', {}).get(
+                 'microformatDataRenderer', {}).get('title')
+             or 'audio')
+    safe  = re.sub(r'[^\w\s-]', '', title).strip() or 'audio'
+
+    tmp_path = os.path.join(out_dir, f'{safe}.{ext}')
+    mp3_path = os.path.join(out_dir, f'{safe}.mp3')
+
+    try:
+        import requests as _req
+        yt_jobs[jid]['message'] = 'Downloading audio stream...'
+        with _req.get(s_url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            total = int(r.headers.get('content-length', 0))
+            done  = 0
+            with open(tmp_path, 'wb') as f:
+                for chunk in r.iter_content(65536):
+                    if chunk:
+                        f.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            yt_jobs[jid]['progress'] = int(done / total * 90)
+                            yt_jobs[jid]['message'] = (
+                                f'Downloading... '
+                                f'{done/1048576:.1f}/{total/1048576:.1f} MB')
+        print(f'[YTMusic] downloaded {done/1048576:.1f} MB → {tmp_path}')
+    except Exception as _e:
+        print(f'[YTMusic] download error: {_e}')
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        return False
+
+    try:
+        yt_jobs[jid]['message'] = 'Converting to MP3...'
+        from pydub import AudioSegment
+        AudioSegment.from_file(tmp_path).export(mp3_path, format='mp3', bitrate='320k')
+        os.unlink(tmp_path)
+        print(f'[YTMusic] converted → {mp3_path}')
+    except Exception as _e:
+        print(f'[YTMusic] conversion: {_e} — using raw file as mp3')
+        if os.path.exists(tmp_path):
+            os.rename(tmp_path, mp3_path)
+
+    if os.path.exists(mp3_path):
+        yt_jobs[jid].update({
+            'status':   'done',
+            'path':     os.path.abspath(mp3_path),
+            'filename': os.path.basename(mp3_path),
+            'title':    title,
+            'progress': 100,
+            'message':  'Complete!',
+        })
+        return True
+
+    return False
+
+
+def run_yt_download(jid, url, title_hint=''):
+    # Direct stream URL pasted from browser DevTools (e.g. for YT Music personal uploads)
+    if _is_direct_stream_url(url):
+        _run_direct_stream_download(jid, url, title_hint)
+        return
+
+    # YouTube Music personal uploads need the Music innertube API directly
+    # because yt-dlp's web_music client requires a GVS PO Token it can't generate.
+    browser = _yt_browser.get('selected')
+    if 'music.youtube.com' in url:
+        if _ytmusic_try(jid, url, browser):
+            return
+
     try:
         import yt_dlp
     except ImportError:
@@ -2573,8 +3237,6 @@ def run_yt_download(jid, url):
             'restrictfilenames': True,
             'windowsfilenames':  True,
         }
-        browser = _yt_browser.get('selected')
-        print(f'[YT Download] url={url!r}  browser_selected={browser!r}')
         if browser == 'chrome':
             # Chrome 127+ blocks cookie access — clear and tell user to pick Firefox
             _yt_browser['selected'] = None
@@ -2584,6 +3246,17 @@ def run_yt_download(jid, url):
             return
         if browser in ('firefox', 'edge', 'opera'):
             ydl_opts['cookiesfrombrowser'] = (browser,)
+        # Personal uploads on YouTube Music: web_music finds the video but needs
+        # a GVS PO Token for its formats. ios client bypasses PO Token requirement
+        # while still having access to Music-authenticated content.
+        if 'music.youtube.com' in url:
+            ydl_opts['extractor_args'] = {
+                'youtube': {
+                    'player_client': ['ios', 'web_music'],
+                }
+            }
+            ydl_opts['quiet']       = False
+            ydl_opts['no_warnings'] = False
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info  = ydl.extract_info(url, download=True)
             title = info.get('title', 'audio') if info else 'audio'
@@ -2601,27 +3274,36 @@ def run_yt_download(jid, url):
             yt_jobs[jid]['status']  = 'error'
             yt_jobs[jid]['message'] = 'MP3 not found after conversion. FFmpeg may be missing.'
     except Exception as e:
-        msg = re.sub(r'\x1b\[[0-9;]*m', '', str(e))
-        auth_kw = ['sign in', 'login', 'not a bot', '403', 'private video',
-                   'members only', 'premium', 'unavailable', 'age']
-        if any(k in msg.lower() for k in auth_kw):
-            msg = 'Login required. Click "Login to YouTube" above, then try again.'
+        raw = re.sub(r'\x1b\[[0-9;]*m', '', str(e)).strip()
+        print(f'[YT Download] error: {raw}')
+        # Show the real error so users can diagnose — prefix with hint if auth-related
+        auth_kw = ['sign in', 'login required', 'not a bot', 'private video',
+                   'members only', 'premium', 'please sign in']
+        if any(k in raw.lower() for k in auth_kw):
+            msg = (f'Auth error — close Firefox completely, reopen it, log into '
+                   f'YouTube, then try again. Detail: {raw}')
+        else:
+            msg = raw
         yt_jobs[jid]['status']  = 'error'
         yt_jobs[jid]['message'] = msg
 
 
 @app.route('/api/yt/download', methods=['POST'])
 def yt_download():
-    data = request.get_json() or {}
-    url  = data.get('url', '').strip()
+    data       = request.get_json() or {}
+    url        = data.get('url', '').strip()
+    title_hint = data.get('title_hint', '').strip()
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
-    if 'youtube.com' not in url and 'youtu.be' not in url:
-        return jsonify({'error': 'Please provide a valid YouTube URL'}), 400
+    _ok_domains = ('youtube.com', 'youtu.be', 'googlevideo.com',
+                   'googleusercontent.com', 'gvt1.com')
+    if not any(d in url for d in _ok_domains):
+        return jsonify({'error': 'Please provide a YouTube URL or a direct stream URL '
+                                 'from browser DevTools'}), 400
     jid = str(uuid.uuid4())[:10]
     yt_jobs[jid] = {'status':'processing','message':'Connecting to YouTube...','progress':0,
-                    'path':None,'filename':'','title':''}
-    t = threading.Thread(target=run_yt_download, args=(jid, url))
+                    'path':None,'filename':'','title': title_hint}
+    t = threading.Thread(target=run_yt_download, args=(jid, url, title_hint))
     t.daemon = True; t.start()
     return jsonify({'job_id': jid})
 
@@ -2639,6 +3321,22 @@ def yt_status(jid):
     })
 
 
+@app.route('/api/ytmusic/browse', methods=['POST'])
+def ytmusic_browse():
+    bid = str(uuid.uuid4())[:10]
+    browse_jobs[bid] = {'status': 'starting', 'message': 'Opening browser...', 'url': None, 'title': ''}
+    t = threading.Thread(target=_run_ytmusic_browser, args=(bid,))
+    t.daemon = True; t.start()
+    return jsonify({'browse_id': bid})
+
+
+@app.route('/api/ytmusic/browse_status/<bid>')
+def ytmusic_browse_status(bid):
+    job = browse_jobs.get(bid)
+    if not job: return jsonify({'status': 'not_found'}), 404
+    return jsonify(job)
+
+
 @app.route('/api/yt/file/<jid>')
 def yt_file(jid):
     job = yt_jobs.get(jid)
@@ -2652,13 +3350,37 @@ def yt_file(jid):
 
 @app.route('/api/yt/select_browser', methods=['POST'])
 def yt_select_browser():
-    import webbrowser as _wb
+    import subprocess
     data    = request.get_json() or {}
     browser = data.get('browser', '').strip().lower()
     if browser not in ('firefox', 'edge', 'opera'):
         return jsonify({'error': 'Unsupported browser'}), 400
     _yt_browser['selected'] = browser
-    _wb.open('https://music.youtube.com')
+    url = 'https://music.youtube.com'
+    # Open in the specific browser so cookies land in the right profile
+    _win_exe = {
+        'firefox': r'C:\Program Files\Mozilla Firefox\firefox.exe',
+        'edge':    r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+        'opera':   r'C:\Program Files\Opera\opera.exe',
+    }
+    exe = _win_exe.get(browser, '')
+    launched = False
+    if exe and os.path.exists(exe):
+        try:
+            subprocess.Popen([exe, url])
+            launched = True
+        except Exception:
+            pass
+    if not launched:
+        # Fallback: use Windows `start` shell command with browser name
+        try:
+            subprocess.Popen(f'start "" "{browser}" "{url}"', shell=True)
+            launched = True
+        except Exception:
+            pass
+    if not launched:
+        import webbrowser as _wb
+        _wb.open(url)
     return jsonify({'ok': True, 'browser': browser})
 
 

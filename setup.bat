@@ -39,6 +39,9 @@ echo.
 echo  Installing audio-separator (lead vs backing vocal split)...
 pip install "audio-separator[cpu]" onnxruntime
 echo.
+echo  Installing pywebview (embedded YouTube Music browser)...
+pip install pywebview
+echo.
 echo  ================================================
 echo    Setup complete! Run start.bat to launch.
 echo  ================================================
